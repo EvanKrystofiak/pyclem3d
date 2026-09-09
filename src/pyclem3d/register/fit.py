@@ -109,6 +109,12 @@ def fit_transform(
         sigma = np.asarray(sigma, dtype=float)
         if sigma.shape == (3,):
             sigma = np.tile(sigma, (n, 1))
+    ext = np.ptp(src, axis=0).max() if n else 1.0
+    if kind != "affine" and np.linalg.matrix_rank(src - src.mean(0), tol=1e-3 * max(ext, 1.0)) < 3:
+        warnings.append(
+            "landmarks are coplanar: the fit is only constrained inside that plane; out-of-plane "
+            "rotation and z scale are arbitrary. Add landmarks at other confocal z before trusting z."
+        )
 
     lam_used: float | None = None
     search = None

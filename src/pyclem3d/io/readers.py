@@ -181,6 +181,62 @@ def _is_network_path(path: Path) -> bool:
     return False
 
 
+def _parse_imagej_info(info: str, raw: RawRead) -> None:
+    """Channel names, emission wavelengths, NA and immersion from the Bio-Formats 'Info' block
+    that Fiji stores in ImageJ TIFFs (Zeiss .czi exports carry them as key = value lines)."""
+    if not info:
+        return
+    kv: dict[str, str] = {}
+    for line in info.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            kv[k.strip()] = v.strip()
+    names: dict[int, str] = {}
+    ems: dict[int, float] = {}
+    for k, v in kv.items():
+        if k.startswith("Information|Image|Channel|EmissionWavelength #"):
+            try:
+                ems[int(k.rsplit("#", 1)[1])] = float(v)
+            except ValueError:
+                pass
+        elif k.startswith("Information|Image|Channel|Name #") or k.startswith(
+            "Information|Image|Channel|Fluor #"
+        ):
+            names.setdefault(int(k.rsplit("#", 1)[1]), v)
+    if not names:  # fall back to the track channel names, skipping the '#' duplicates
+        for k, v in kv.items():
+            if (
+                k.startswith("Experiment|AcquisitionBlock|MultiTrackSetup|Track|Channel|Name #")
+                and "#" not in v
+            ):
+                names[len(names) + 1] = v
+    n = int(kv.get("SizeC", raw.data.shape[0] if raw.data is not None else 0) or 0)
+    if names and n and len(names) >= n:
+        raw.channel_names = [names.get(i + 1, f"ch{i}") for i in range(n)]
+    if ems and n:
+        raw.emission_nm = [ems.get(i + 1) for i in range(n)]
+    na = kv.get("Information|Instrument|Objective|LensNA")
+    if na:
+        try:
+            raw.metadata["na"] = float(na)
+        except ValueError:
+            pass
+    ri = kv.get("Information|Instrument|Objective|ImmersionRefractiveIndex")
+    imm = kv.get("Information|Instrument|Objective|Immersion")
+    if ri:
+        try:
+            raw.metadata["immersion"] = float(ri)
+        except ValueError:
+            raw.metadata["immersion"] = imm
+    elif imm:
+        raw.metadata["immersion"] = imm
+    obj = kv.get("Information|Instrument|Objective|Name")
+    if obj:
+        raw.metadata["objective"] = obj
+    if "Airyscan" in kv.get("Series 0 Name", "") or any("AiryScan" in k for k in kv):
+        raw.metadata["airyscan"] = True
+
+
 def read_tiff(path: Path, series_index: int = 0) -> RawRead:
     import tifffile
     import zarr
@@ -208,6 +264,8 @@ def read_tiff(path: Path, series_index: int = 0) -> RawRead:
         ]
     raw.data = arr
     raw.voxel_size_nm = _tiff_voxel_size(tf, series, raw)
+    if tf.imagej_metadata and tf.imagej_metadata.get("Info"):
+        _parse_imagej_info(str(tf.imagej_metadata["Info"]), raw)
     raw.metadata["format"] = "tiff"
     raw.metadata["axes_in_file"] = axes
     rec = _recommend_conversion(path, tf, series)
