@@ -204,6 +204,81 @@ def write_ome_tiff(
     return path
 
 
+def _imagej_lut(color: str | None) -> np.ndarray:
+    c = (color or "FFFFFF").lstrip("#")
+    rgb = np.array([int(c[i : i + 2], 16) for i in (0, 2, 4)], dtype=np.float64) / 255.0
+    ramp = np.arange(256, dtype=np.float64)
+    return np.stack([np.round(ramp * v) for v in rgb]).astype(np.uint8)  # (3, 256)
+
+
+def write_imagej_tiff(
+    path: str | os.PathLike,
+    data: da.Array,
+    voxel_size_nm: tuple[float, float, float],
+    channels: Sequence[Channel] | None = None,
+    ranges: Sequence[tuple[float, float]] | None = None,
+) -> Path:
+    """Stream a (C,Z,Y,X) array as an ImageJ *hyperstack* (composite, channel LUTs, spacing).
+
+    Fiji's plain File > Open / drag-and-drop understands this format directly (OME-TIFF needs
+    the Bio-Formats importer). ImageJ stores planes in ZC order and is limited to 4 GB.
+    """
+    import tifffile
+
+    path = Path(path)
+    if data.ndim == 3:
+        data = data[None]
+    C, Z, Y, X = (int(s) for s in data.shape)
+    dz, dy, dx = (float(v) / 1000.0 for v in voxel_size_nm)  # um
+    if C * Z * Y * X * data.dtype.itemsize > 4 * 2**30:
+        raise ValueError(
+            "ImageJ hyperstacks are limited to 4 GB; write OME-Zarr or OME-TIFF instead"
+        )
+    chans = list(channels) if channels else [Channel(f"ch{i}", i) for i in range(C)]
+    if ranges is None:
+        ranges = []
+        for c in range(C):
+            lo = (
+                float(da.percentile(data[c].ravel(), 0.1).compute())
+                if data.dtype.kind == "f"
+                else None
+            )
+            mx = float(data[c].max().compute())
+            mn = float(data[c].min().compute()) if lo is None else lo
+            ranges.append((mn, mx))
+    meta: dict[str, Any] = {
+        "axes": "ZCYX",
+        "mode": "composite",
+        "unit": "um",
+        "spacing": dz,
+        "LUTs": [_imagej_lut(ch.color) for ch in chans],
+        "Ranges": [float(v) for r in ranges for v in r],
+    }
+    meta = {k: v for k, v in meta.items() if v is not None}
+
+    def planes():
+        z0 = 0
+        for zc in data.chunks[1]:
+            block = np.asarray(data[:, z0 : z0 + zc].compute())  # (C, zc, Y, X)
+            for k in range(block.shape[1]):
+                for c in range(C):
+                    yield block[c, k]
+            z0 += zc
+
+    tifffile.imwrite(
+        str(path),
+        planes(),
+        shape=(Z, C, Y, X),
+        dtype=data.dtype,
+        imagej=True,
+        resolution=(1.0 / dx, 1.0 / dy),
+        metadata=meta,
+        photometric="minisblack",
+    )
+    log.info("wrote ImageJ hyperstack %s (%d channels, %d planes)", path, C, Z)
+    return path
+
+
 _MRC_DTYPES = {
     np.dtype("int8"): np.dtype("int8"),
     np.dtype("uint8"): np.dtype("uint16"),  # lossless widening; MRC has no uint8 mode
