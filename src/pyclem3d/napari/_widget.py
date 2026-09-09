@@ -385,6 +385,17 @@ class PyCLEM3DWidget(QWidget):
     def _ensure_lm_viewer(self) -> None:
         import napari
 
+        if (
+            self.lm_viewer is not None
+            and self.lm_raw_layers
+            and not self._alive(self.lm_viewer, self.lm_raw_layers)
+        ):
+            # the LM window was closed by the user: start a fresh one
+            self.lm_viewer = None
+            self.lm_points = None
+            self.cursor_lm = None
+            self.slab_layer = None
+            self.lm_raw_layers = []
         if self.lm_viewer is None:
             headless = os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen" or bool(
                 os.environ.get("PYCLEM3D_SYNC")
@@ -1437,6 +1448,8 @@ class PyCLEM3DWidget(QWidget):
     def _on_em_mouse(self, viewer, event) -> None:
         if not self._sync or self.cursor_lm is None or self.lm is None:
             return
+        if not self._alive(self.lm_viewer, self.lm_raw_layers):
+            return  # LM window closed: stop syncing until it is reopened
         try:
             p = np.asarray(viewer.cursor.position, dtype=float)[-3:]
             self.cursor_lm.data = self._inverse_point(p)[None]
@@ -1445,6 +1458,8 @@ class PyCLEM3DWidget(QWidget):
 
     def _on_lm_mouse(self, viewer, event) -> None:
         if not self._sync or self.cursor_em is None:
+            return
+        if not self._alive(self.viewer, self.em_layers):
             return
         try:
             p = np.asarray(viewer.cursor.position, dtype=float)[-3:]
