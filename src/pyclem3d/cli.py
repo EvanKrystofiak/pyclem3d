@@ -458,6 +458,16 @@ def cmd_export(args: argparse.Namespace) -> int:
         )
         done["fused_ome_zarr"] = str(out)
         print(f"fused OME-Zarr: {out}")
+        if args.imagej_tif:
+            from .io.readers import open_volume as _open_volume
+            from .io.writers import write_imagej_tiff
+
+            fused_vol = _open_volume(out, kind="em", memory="skip", pyramid="none")
+            ij = write_imagej_tiff(
+                args.imagej_tif, fused_vol.data, fused_vol.voxel_size_nm, fused_vol.channels
+            )
+            done["fused_imagej_tif"] = str(ij)
+            print(f"ImageJ hyperstack (drag into Fiji): {ij}")
     if args.transforms:
         w = export_all_transforms(
             t,
@@ -814,6 +824,10 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--em-level", type=int)
     ex.add_argument(
         "--roi", nargs=6, type=float, metavar="NM", help="z0 y0 x0 z1 y1 x1 in EM world nm"
+    )
+    ex.add_argument(
+        "--imagej-tif",
+        help="also write the fused stack as an ImageJ hyperstack (.tif, < 4 GB) for plain Fiji File > Open",
     )
     ex.add_argument("--transforms", help="directory for JSON / ITK / BigWarp / NRRD exports")
     ex.add_argument("--bdv", help="BigDataViewer XML path (H5 next to it)")
