@@ -12,3 +12,4 @@ htmlcov/
 *.zarr/
 scratch/
 tests/_out/
+demo/

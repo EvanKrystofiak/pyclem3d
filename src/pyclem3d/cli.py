@@ -517,6 +517,26 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    """Open napari with the pyCLEM-3D panel docked (and a session loaded)."""
+    try:
+        import napari
+    except ImportError as e:
+        raise ImportError(
+            "the viewer needs napari: uv sync --extra gui  (or pip install 'pyclem3d[gui]')"
+        ) from e
+    from .napari._widget import PyCLEM3DWidget
+
+    viewer = napari.Viewer(title="pyCLEM-3D")
+    widget = PyCLEM3DWidget(viewer)
+    viewer.window.add_dock_widget(widget, name="pyCLEM-3D", area="right")
+    if args.session:
+        widget.session_path.setText(str(Path(args.session).resolve()))
+        widget._open_session()
+    napari.run()
+    return 0
+
+
 # --------------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -693,6 +713,12 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--cache-dir")
     ex.add_argument("--memory", choices=["ram", "lazy"])
     ex.set_defaults(func=cmd_export)
+
+    g = sub.add_parser(
+        "gui", help="open napari with the pyCLEM-3D panel (optionally with a session)"
+    )
+    g.add_argument("session", nargs="?")
+    g.set_defaults(func=cmd_gui)
     return p
 
 
