@@ -59,6 +59,20 @@ plan's workflow: the main viewer is the EM (reference grid, never resampled) wit
 overlaid through its layer affine; a second viewer shows the raw LM for picking landmarks,
 with a synced cursor and z. Deformable fits show a lazily computed overlay.
 
+## Mitochondria segmentation (empanada) in the same napari
+
+`uv sync --extra gui --extra seg` installs [empanada-napari](https://github.com/volume-em/empanada-napari)
+(MitoNet) next to the pyCLEM-3D panel, with PyTorch from the CUDA 12.8 wheel index so the GPU is used.
+MitoNet weights are cached in `~/.empanada` on first use (about 220 MB from Zenodo; pre-download with
+`torch.hub.download_url_to_file` if Zenodo is slow). On 8 nm FIB-SEM, "3D Inference" with inference
+scale 2 (16 nm) gives the most contiguous mitochondria at a quarter of the cost; one 1462 × 1142 slice
+takes about a second on an RTX 4070.
+
+The intended use (plan Phase 6): export the MitoNet label volume, blur it with the confocal PSF into a
+synthetic fluorescence volume, and register that against the MitoTracker channel as a mono-modal
+intensity problem (affine, then deformable). The current landmark workflow remains the reference and
+the manual single-slice overlay the validation set.
+
 ## Conventions
 
 * Units are **nanometres**; arrays are `(C, Z, Y, X)`; every volume has a 4×4
