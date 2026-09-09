@@ -78,6 +78,7 @@ def export_fused_ome_zarr(
     max_levels: int = 8,
     min_size: int = 64,
     extra_attrs: dict[str, Any] | None = None,
+    masks: list[tuple[str, da.Array]] | None = None,
 ) -> Path:
     """Write EM + warped LM (+ coverage) as one OME-Zarr in EM world space.
 
@@ -124,8 +125,18 @@ def export_fused_ome_zarr(
                 emission_nm=c.emission_nm,
             )
         )
+    hi = float(np.iinfo(dtype).max) if np.issubdtype(dtype, np.integer) else 1.0
+    for mname, marr in masks or []:
+        # segmentation masks on the EM level-0 grid: mean-coarsen to the export level (fraction
+        # of the voxel covered), cropped like the EM
+        from ..io.pyramid import coarsen
+
+        fac = em.pyramid_factors[lvl] if em.pyramid_factors else (1, 1, 1)
+        mm = coarsen(marr.astype(np.float32)[None], tuple(int(f) for f in fac))[0]
+        mm = mm[sl[0], sl[1], sl[2]]
+        parts.append((mm * dtype.type(hi)).astype(dtype)[None].rechunk((1, ch[1], ch[2], ch[3])))
+        channels.append(Channel(f"SEG:{mname}", len(channels), "FFFF00", 0, hi, 0, hi))
     if include_coverage:
-        hi = float(np.iinfo(dtype).max) if np.issubdtype(dtype, np.integer) else 1.0
         parts.append((cov.astype(dtype) * dtype.type(hi))[None].rechunk((1, ch[1], ch[2], ch[3])))
         channels.append(Channel("coverage", len(channels), "808080", 0, hi, 0, hi, visible=False))
     fused = da.concatenate(parts, axis=0)

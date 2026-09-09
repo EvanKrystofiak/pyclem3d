@@ -537,6 +537,122 @@ def cmd_gui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_segment(args: argparse.Namespace) -> int:
+    """Segment an EM stack with empanada (MitoNet / NucleoNet) into a zarr mask."""
+    from .seg.mitonet import segment_volume
+
+    vol = _open(args.stack, "em", args, memory="ram" if not args.lazy else "lazy", pyramid="none")
+    zr = tuple(args.z_range) if args.z_range else None
+
+    def prog(i, n):
+        if i % 50 == 0 or i == n:
+            print(f"  {i}/{n} slices", flush=True)
+
+    out = segment_volume(
+        vol,
+        args.out,
+        model=args.model,
+        inference_scale=args.scale,
+        semantic=not args.instances,
+        channel=args.channel,
+        z_range=zr,
+        use_gpu=not args.cpu,
+        progress=prog,
+    )
+    print(f"mask written: {out}")
+    return 0
+
+
+def cmd_register_seg(args: argparse.Namespace) -> int:
+    """Segmentation-to-image registration: mask -> synthetic fluorescence -> z scan -> affine."""
+    from .register.fit import fit_landmarks
+    from .register.transforms import AffineTransform
+    from .seg.intensity import ncc_on_synthetic, register_affine, z_scan
+    from .seg.mitonet import open_mask
+    from .seg.synthetic import synthetic_fluorescence
+    from .session import Session
+
+    sess = Session.load(args.session)
+    em, lm = sess.open_volumes(cache_dir=args.cache_dir, memory="ram")
+    mask, _ = open_mask(args.mask)
+    psf = tuple(args.psf) if args.psf else (lm.psf_nm if lm.psf_nm else (500.0, 200.0))
+    zr = tuple(args.z_range) if args.z_range else None
+    syn = synthetic_fluorescence(mask, em, target_voxel_nm=args.voxel, psf_fwhm_nm=psf, z_range=zr)  # type: ignore[arg-type]
+    coarse = synthetic_fluorescence(
+        mask, em, target_voxel_nm=2 * args.voxel, psf_fwhm_nm=psf, z_range=zr
+    )  # type: ignore[arg-type]
+    t0 = sess.transform_obj()
+    if t0 is None:
+        if sess.landmarks.n_enabled >= 3:
+            t0 = fit_landmarks(sess.landmarks, "similarity", lam=None, with_loo=False).transform
+            print("initial transform: similarity from the session landmarks")
+        else:
+            raise SystemExit(
+                "the session needs a transform (register / locate) or >= 3 landmarks to start from"
+            )
+    else:
+        print(f"initial transform: session ({t0.kind})")
+    if not t0.is_linear:
+        t0 = t0.affine_part()  # type: ignore[attr-defined]
+    M = t0.matrix.copy()
+    # z sign: try both when asked (coplanar landmarks leave it undetermined)
+    cands = []
+    if args.z_sign == "auto":
+        s_xy = float(np.sqrt(abs(np.linalg.det(M[1:3, 1:3]))))
+        for sign in (+1.0, -1.0):
+            Mi = M.copy()
+            Mi[0, :3] = 0.0
+            Mi[0, 0] = sign * s_xy
+            cands.append(AffineTransform(Mi))
+    else:
+        cands.append(AffineTransform(M))
+    scored = [(ncc_on_synthetic(coarse, lm, args.channel, t), t) for t in cands]
+    for n, t in scored:
+        print(f"  candidate z row {np.round(t.matrix[0], 3).tolist()}: NCC {n:.4f}")
+    ncc0, t_init = max(scored, key=lambda x: x[0])
+    offsets = np.arange(-args.z_range_nm, args.z_range_nm + 1, args.z_step)
+    scales = tuple(float(v) for v in args.z_scales.split(","))
+    scan = z_scan(coarse, lm, args.channel, t_init, offsets, z_scales=scales)
+    best = max(scan, key=lambda r: r["ncc"] if np.isfinite(r["ncc"]) else -1)
+    print(
+        "z scan at z scale 1.0: "
+        + " ".join(f"{r['offset_nm']:+.0f}:{r['ncc']:.3f}" for r in scan if r["z_scale"] == 1.0)
+    )
+    print(
+        f"z scan best: offset {best['offset_nm']:+.0f} nm, z scale {best['z_scale']}, NCC {best['ncc']:.4f}"
+    )
+    Mb = t_init.matrix.copy()
+    Mb[0, :3] *= best["z_scale"]
+    Mb[0, 3] += best["offset_nm"]
+    res = register_affine(
+        syn,
+        lm,
+        args.channel,
+        AffineTransform(Mb),
+        metric=args.metric,
+        iterations=args.iterations,
+        learning_rate=args.learning_rate,
+        sampling=args.sampling,
+    )
+    print(res.summary())
+    ncc1 = ncc_on_synthetic(syn, lm, args.channel, res.lm_to_em)
+    print(f"NCC on synthetic: initial {ncc0:.4f} -> seed {best['ncc']:.4f} -> affine {ncc1:.4f}")
+    sess.transform = res.lm_to_em.to_dict()
+    sess.kind = "affine"
+    sess.fit = None
+    sess.displacement = None
+    sess.outputs["register_seg"] = {
+        "mask": str(args.mask),
+        "channel": int(args.channel),
+        "ncc": {"initial": ncc0, "seed": best["ncc"], "affine": ncc1},
+        "z_scan": scan,
+        "metric": [res.metric_before, res.metric_after],
+    }
+    sess.save()
+    print(f"session updated: {sess.path}")
+    return 0
+
+
 # --------------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -713,6 +829,53 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--cache-dir")
     ex.add_argument("--memory", choices=["ram", "lazy"])
     ex.set_defaults(func=cmd_export)
+
+    sg = sub.add_parser(
+        "segment", help="segment an EM stack with empanada (mito | nucleus | model name)"
+    )
+    sg.add_argument("stack")
+    add_open_args(sg)
+    sg.add_argument("--out", required=True, help="zarr mask path")
+    sg.add_argument("--model", default="mito")
+    sg.add_argument(
+        "--scale", type=int, default=2, help="inference scale (2 = 16 nm for 8 nm data)"
+    )
+    sg.add_argument(
+        "--instances", action="store_true", help="2D instance labels instead of a semantic mask"
+    )
+    sg.add_argument("--channel", type=int, default=0)
+    sg.add_argument("--z-range", nargs=2, type=int, metavar=("Z0", "Z1"))
+    sg.add_argument("--lazy", action="store_true", help="do not load the stack into RAM")
+    sg.add_argument("--cpu", action="store_true")
+    sg.set_defaults(func=cmd_segment)
+
+    rs = sub.add_parser(
+        "register-seg",
+        help="register a segmentation-derived synthetic volume to an LM channel (affine)",
+    )
+    rs.add_argument("session")
+    rs.add_argument("--mask", required=True, help="zarr mask from 'segment'")
+    rs.add_argument(
+        "--channel",
+        type=int,
+        required=True,
+        help="LM channel index that labels the segmented organelle",
+    )
+    rs.add_argument("--voxel", type=float, default=32.0, help="synthetic voxel size (nm)")
+    rs.add_argument("--psf", nargs=2, type=float, metavar=("FWHM_Z", "FWHM_XY"))
+    rs.add_argument(
+        "--z-range", nargs=2, type=int, metavar=("Z0", "Z1"), help="EM slices to consider"
+    )
+    rs.add_argument("--z-sign", choices=["auto", "keep"], default="auto")
+    rs.add_argument("--z-range-nm", type=float, default=2400.0)
+    rs.add_argument("--z-step", type=float, default=150.0)
+    rs.add_argument("--z-scales", default="0.8,1.0,1.2")
+    rs.add_argument("--metric", choices=["correlation", "mi"], default="correlation")
+    rs.add_argument("--iterations", type=int, default=250)
+    rs.add_argument("--learning-rate", type=float, default=0.5)
+    rs.add_argument("--sampling", type=float, default=0.3)
+    rs.add_argument("--cache-dir")
+    rs.set_defaults(func=cmd_register_seg)
 
     g = sub.add_parser(
         "gui", help="open napari with the pyCLEM-3D panel (optionally with a session)"

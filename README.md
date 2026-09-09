@@ -68,10 +68,21 @@ MitoNet weights are cached in `~/.empanada` on first use (about 220 MB from Zeno
 scale 2 (16 nm) gives the most contiguous mitochondria at a quarter of the cost; one 1462 × 1142 slice
 takes about a second on an RTX 4070.
 
-The intended use (plan Phase 6): export the MitoNet label volume, blur it with the confocal PSF into a
-synthetic fluorescence volume, and register that against the MitoTracker channel as a mono-modal
-intensity problem (affine, then deformable). The current landmark workflow remains the reference and
-the manual single-slice overlay the validation set.
+Segmentation-driven registration (plan Phase 6) is implemented in `pyclem3d.seg`:
+
+```bash
+pyclem3d segment FIBVOLUME.tif --out seg/mito.zarr --model mito          # MitoNet, ~0.05 s/slice on a GPU
+pyclem3d register-seg session.json --mask seg/mito.zarr --channel 1       # channel 1 = MitoTracker
+pyclem3d export session.json --fused correlated.zarr
+```
+
+`register-seg` blurs the mask with the confocal PSF into a synthetic fluorescence volume, tries both
+z directions, scans the depth offset and z scale (the printed NCC curve shows whether depth is
+determined at all), then optimises a 3D affine with SimpleITK using the synthetic volume as the
+fixed image. It needs a starting transform in the session (a landmark fit, even a single-plane one,
+or `locate`). On the example FIB-SEM / Airyscan pair it reproduced the manual single-slice overlay
+and held across the whole confocal slab; the phantom test recovers a 540 nm perturbation to 40 nm.
+A B-spline stage (`register_bspline`) exists for local deformation but is not wired into the CLI yet.
 
 ## Conventions
 
