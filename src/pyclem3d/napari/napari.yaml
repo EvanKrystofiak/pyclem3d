@@ -1,0 +1,29 @@
+name: pyclem3d
+display_name: pyCLEM-3D
+schema_version: 0.2.0
+contributions:
+  commands:
+    - id: pyclem3d.get_reader
+      python_name: pyclem3d.napari._reader:napari_get_reader
+      title: Open a volume with pyclem3d (lazy, physical units)
+    - id: pyclem3d.workflow_widget
+      python_name: pyclem3d.napari._widget:PyCLEM3DWidget
+      title: pyCLEM-3D workflow
+  readers:
+    - command: pyclem3d.get_reader
+      filename_patterns:
+        - "*.mrc"
+        - "*.rec"
+        - "*.st"
+        - "*.ali"
+        - "*.tif"
+        - "*.tiff"
+        - "*.ome.tif"
+        - "*.zarr"
+        - "*.lif"
+        - "*.czi"
+        - "*.nd2"
+      accepts_directories: true
+  widgets:
+    - command: pyclem3d.workflow_widget
+      display_name: pyCLEM-3D
