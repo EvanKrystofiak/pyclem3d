@@ -548,28 +548,47 @@ def cmd_gui(args: argparse.Namespace) -> int:
 
 
 def cmd_segment(args: argparse.Namespace) -> int:
-    """Segment an EM stack with empanada (MitoNet / NucleoNet) into a zarr mask."""
-    from .seg.mitonet import segment_volume
+    """Segment an EM stack into a zarr mask with empanada (MitoNet/NucleoNet) or QuantEM."""
+    from .seg.quantem import is_quantem_model, segment_volume_quantem
 
     vol = _open(args.stack, "em", args, memory="ram" if not args.lazy else "lazy", pyramid="none")
     zr = tuple(args.z_range) if args.z_range else None
+    backend = args.backend
+    if backend == "auto":
+        backend = "quantem" if is_quantem_model(args.model) else "empanada"
 
     def prog(i, n):
         if i % 50 == 0 or i == n:
             print(f"  {i}/{n} slices", flush=True)
 
-    out = segment_volume(
-        vol,
-        args.out,
-        model=args.model,
-        inference_scale=args.scale,
-        semantic=not args.instances,
-        channel=args.channel,
-        z_range=zr,
-        use_gpu=not args.cpu,
-        progress=prog,
-    )
-    print(f"mask written: {out}")
+    if backend == "quantem":
+        out = segment_volume_quantem(
+            vol,
+            args.out,
+            model=args.model,
+            semantic=not args.instances,
+            channel=args.channel,
+            z_range=zr,
+            device="cpu" if args.cpu else "auto",
+            threshold=args.threshold,
+            save_probability=args.save_probability,
+            progress=prog,
+        )
+    else:
+        from .seg.mitonet import segment_volume
+
+        out = segment_volume(
+            vol,
+            args.out,
+            model=args.model,
+            inference_scale=args.scale,
+            semantic=not args.instances,
+            channel=args.channel,
+            z_range=zr,
+            use_gpu=not args.cpu,
+            progress=prog,
+        )
+    print(f"mask written ({backend}): {out}")
     return 0
 
 
@@ -845,7 +864,8 @@ def build_parser() -> argparse.ArgumentParser:
     ex.set_defaults(func=cmd_export)
 
     sg = sub.add_parser(
-        "segment", help="segment an EM stack with empanada (mito | nucleus | model name)"
+        "segment",
+        help="segment an EM stack with empanada (mito | nucleus | MitoNet_v1) or QuantEM (quantem/mito, omniem/nucleus, ...)",
     )
     sg.add_argument("stack")
     add_open_args(sg)
@@ -861,6 +881,16 @@ def build_parser() -> argparse.ArgumentParser:
     sg.add_argument("--z-range", nargs=2, type=int, metavar=("Z0", "Z1"))
     sg.add_argument("--lazy", action="store_true", help="do not load the stack into RAM")
     sg.add_argument("--cpu", action="store_true")
+    sg.add_argument(
+        "--backend",
+        choices=["auto", "empanada", "quantem"],
+        default="auto",
+        help="auto: QuantEM for 'quantem/...' or 'omniem/...' model ids, empanada otherwise",
+    )
+    sg.add_argument("--threshold", type=float, help="QuantEM foreground probability threshold")
+    sg.add_argument(
+        "--save-probability", action="store_true", help="QuantEM: also store the probability map"
+    )
     sg.set_defaults(func=cmd_segment)
 
     rs = sub.add_parser(

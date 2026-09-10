@@ -68,6 +68,17 @@ MitoNet weights are cached in `~/.empanada` on first use (about 220 MB from Zeno
 scale 2 (16 nm) gives the most contiguous mitochondria at a quarter of the cost; one 1462 × 1142 slice
 takes about a second on an RTX 4070.
 
+Two segmentation backends share one output contract (a zarr mask with the EM's geometry), so
+everything downstream is backend-agnostic:
+
+| Backend | Models | Notes |
+|---|---|---|
+| empanada (`--model mito`, `nucleus`, or any bundled name) | MitoNet, NucleoNet | panoptic; ~0.05 s/slice at inference scale 2 on an RTX 4070 |
+| QuantEM (`--model quantem/mito`, `omniem/nucleus`, `omniem/er`, `omniem/ld`) | ViT-B/16 (QuantEM) and ViT-L/14 (OmniEM) from https://huggingface.co/ArrojoeDrigoLab/quantem | works at its canonical 8 nm, returns instances + probability; ~0.5 s/slice; `--save-probability` keeps the soft map |
+
+`--backend auto` picks QuantEM for `quantem/...` and `omniem/...` ids and empanada otherwise. Both
+napari plugins (empanada-napari, napari-quantem) are installed by the `seg` extra.
+
 Segmentation-driven registration (plan Phase 6) is implemented in `pyclem3d.seg`:
 
 ```bash
