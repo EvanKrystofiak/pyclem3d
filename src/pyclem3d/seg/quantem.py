@@ -56,15 +56,17 @@ def segment_volume_quantem(
     z_range: tuple[int, int] | None = None,
     device: str = "auto",
     threshold: float | None = None,
-    save_probability: bool = False,
+    save_probability: bool = True,
     progress=None,
     engine=None,
 ) -> Path:
     """Segment every slice of ``volume`` with a QuantEM model and write ``out_path`` (zarr).
 
     Output array ``0`` is a uint8 semantic mask (or uint32 2D instance labels with
-    ``semantic=False``); with ``save_probability`` a second array ``prob`` holds the
-    foreground probability scaled to uint8, which makes a softer synthetic fluorescence.
+    ``semantic=False``); by default a second array ``prob`` holds the foreground probability
+    scaled to uint8. The probability is what the registration uses when present: blurred into
+    the synthetic fluorescence it weights each voxel by the model's confidence instead of a
+    hard 0/1 decision.
     """
     out_path = Path(out_path)
     m = engine or load_quantem(model, device)
@@ -145,3 +147,13 @@ def segment_any(
     from .mitonet import segment_volume
 
     return segment_volume(volume, out_path, model=model, **kw)
+
+
+def open_probability(path: str | os.PathLike):
+    """Lazy (Z, Y, X) float32 probability in [0, 1] from a QuantEM mask zarr, or None."""
+    import dask.array as da
+
+    g = open_group_v2(path, mode="r")
+    if "prob" not in g:
+        return None
+    return da.from_zarr(str(path), component="prob").astype(np.float32) / 255.0

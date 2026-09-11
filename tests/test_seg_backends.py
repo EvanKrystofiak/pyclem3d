@@ -83,6 +83,24 @@ def test_quantem_backend_writes_mask_and_probability(tmp_path):
     prob = np.asarray(g["prob"][2])
     assert prob.dtype == np.uint8 and prob[15, 20] > 200 and prob[5, 40] < 80
     assert 0.0 < attrs["foreground_fraction"] < 0.5 and attrs["objects_per_slice"] > 0
+    # the probability is stored by default and comes back as a float in [0, 1]
+    from pyclem3d.seg.quantem import open_probability
+
+    out2 = segment_volume_quantem(
+        em, tmp_path / "q2.zarr", model="quantem/mito", engine=_FakeQuantEM()
+    )
+    soft = open_probability(out2)
+    assert soft is not None and soft.dtype == np.float32
+    s = np.asarray(soft.compute())
+    assert 0.0 <= s.min() and s.max() <= 1.0 and s[2, 15, 20] > 0.8 and s[2, 5, 40] < 0.3
+    out3 = segment_volume_quantem(
+        em,
+        tmp_path / "q3.zarr",
+        model="quantem/mito",
+        engine=_FakeQuantEM(),
+        save_probability=False,
+    )
+    assert open_probability(out3) is None
 
 
 def test_segment_any_dispatches_by_model_id(tmp_path):

@@ -76,8 +76,15 @@ everything downstream is backend-agnostic:
 | empanada (`--model mito`, `nucleus`, or any bundled name) | MitoNet, NucleoNet | panoptic; ~0.05 s/slice at inference scale 2 on an RTX 4070 |
 | QuantEM (`--model quantem/mito`, `omniem/nucleus`, `omniem/er`, `omniem/ld`) | ViT-B/16 (QuantEM) and ViT-L/14 (OmniEM) from https://huggingface.co/ArrojoeDrigoLab/quantem | works at its canonical 8 nm, returns instances + probability; ~0.5 s/slice; `--save-probability` keeps the soft map |
 
-`--backend auto` picks QuantEM for `quantem/...` and `omniem/...` ids and empanada otherwise. Both
-napari plugins (empanada-napari, napari-quantem) are installed by the `seg` extra.
+QuantEM is the default (`--model quantem/mito`); `--backend auto` picks QuantEM for `quantem/...` and
+`omniem/...` ids and empanada otherwise. Both napari plugins (empanada-napari, napari-quantem) are
+installed by the `seg` extra.
+
+QuantEM covers four organelles, each in two encoder sizes: **mitochondria** (`quantem/mito`, 8 nm),
+**nucleus** (`omniem/nucleus`, 25 nm), **lipid droplets** (`omniem/ld`, 8 nm) and **endoplasmic
+reticulum** (`omniem/er`, semantic). The QuantEM backend stores the model's probability map next to the
+mask by default; `register-seg` uses it as a probability-weighted synthetic volume (each voxel enters
+the fit with the model's confidence), `--hard` falls back to the binary mask.
 
 Segmentation-driven registration (plan Phase 6) is implemented in `pyclem3d.seg`:
 

@@ -60,6 +60,30 @@ def test_synthetic_matches_true_channel(phantom):
     assert good > flipped + 0.15
 
 
+def test_probability_weighted_synthetic(phantom):
+    """A soft mask (per-voxel probability) is a valid synthetic source and scores no worse than
+    the hard mask; confident voxels dominate, uncertain ones are down-weighted."""
+    import dask.array as da
+    from scipy.ndimage import gaussian_filter
+
+    em, lm, truth, mask = phantom
+    hard = np.asarray(mask.compute()).astype(np.float32)
+    # a plausible probability map: the mask blurred by a voxel, plus a low-confidence halo
+    prob = np.clip(
+        gaussian_filter(hard, 1.0) * 0.9 + 0.05 * (gaussian_filter(hard, 3.0) > 0.05), 0, 1
+    )
+    soft = da.from_array(prob.astype(np.float32), chunks=mask.chunks)
+    T = AffineTransform(truth.lm_to_em)
+    syn_hard = synthetic_fluorescence(mask, em, target_voxel_nm=40.0, psf_fwhm_nm=(400.0, 160.0))
+    syn_soft = synthetic_fluorescence(soft, em, target_voxel_nm=40.0, psf_fwhm_nm=(400.0, 160.0))
+    n_hard = ncc_on_synthetic(syn_hard, lm, 1, T)
+    n_soft = ncc_on_synthetic(syn_soft, lm, 1, T)
+    assert n_soft > 0.6 and n_soft >= n_hard - 0.05
+    M = T.matrix.copy()
+    M[0, 3] += 600.0
+    assert n_soft > ncc_on_synthetic(syn_soft, lm, 1, AffineTransform(M)) + 0.15
+
+
 def test_z_scan_and_affine_recover_truth(phantom):
     em, lm, truth, mask = phantom
     syn = synthetic_fluorescence(mask, em, target_voxel_nm=40.0, psf_fwhm_nm=(400.0, 160.0))

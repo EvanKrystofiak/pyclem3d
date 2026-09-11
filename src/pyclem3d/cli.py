@@ -571,7 +571,7 @@ def cmd_segment(args: argparse.Namespace) -> int:
             z_range=zr,
             device="cpu" if args.cpu else "auto",
             threshold=args.threshold,
-            save_probability=args.save_probability,
+            save_probability=not args.no_probability,
             progress=prog,
         )
     else:
@@ -598,12 +598,17 @@ def cmd_register_seg(args: argparse.Namespace) -> int:
     from .register.transforms import AffineTransform
     from .seg.intensity import ncc_on_synthetic, register_affine, z_scan
     from .seg.mitonet import open_mask
+    from .seg.quantem import open_probability
     from .seg.synthetic import synthetic_fluorescence
     from .session import Session
 
     sess = Session.load(args.session)
     em, lm = sess.open_volumes(cache_dir=args.cache_dir, memory="ram")
     mask, _ = open_mask(args.mask)
+    soft = None if args.hard else open_probability(args.mask)
+    if soft is not None:
+        mask = soft  # probability-weighted synthetic fluorescence (QuantEM 'prob' array)
+        print("using the segmentation probability map as the synthetic source")
     psf = tuple(args.psf) if args.psf else (lm.psf_nm if lm.psf_nm else (500.0, 200.0))
     zr = tuple(args.z_range) if args.z_range else None
     syn = synthetic_fluorescence(mask, em, target_voxel_nm=args.voxel, psf_fwhm_nm=psf, z_range=zr)  # type: ignore[arg-type]
@@ -672,6 +677,7 @@ def cmd_register_seg(args: argparse.Namespace) -> int:
     sess.displacement = None
     sess.outputs["register_seg"] = {
         "mask": str(args.mask),
+        "soft": soft is not None,
         "channel": int(args.channel),
         "ncc": {"initial": ncc0, "seed": best["ncc"], "affine": ncc1},
         "z_scan": scan,
@@ -870,7 +876,11 @@ def build_parser() -> argparse.ArgumentParser:
     sg.add_argument("stack")
     add_open_args(sg)
     sg.add_argument("--out", required=True, help="zarr mask path")
-    sg.add_argument("--model", default="mito")
+    sg.add_argument(
+        "--model",
+        default="quantem/mito",
+        help="quantem/mito (default), omniem/nucleus|er|ld, or an empanada name (mito, nucleus, MitoNet_v1)",
+    )
     sg.add_argument(
         "--scale", type=int, default=2, help="inference scale (2 = 16 nm for 8 nm data)"
     )
@@ -918,6 +928,11 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--iterations", type=int, default=250)
     rs.add_argument("--learning-rate", type=float, default=0.5)
     rs.add_argument("--sampling", type=float, default=0.3)
+    rs.add_argument(
+        "--hard",
+        action="store_true",
+        help="use the binary mask even if a probability map is stored",
+    )
     rs.add_argument("--cache-dir")
     rs.set_defaults(func=cmd_register_seg)
 
