@@ -97,10 +97,20 @@ pyclem3d export session.json --fused correlated.zarr
 `register-seg` blurs the mask with the confocal PSF into a synthetic fluorescence volume, tries both
 z directions, scans the depth offset and z scale (the printed NCC curve shows whether depth is
 determined at all), then optimises a 3D affine with SimpleITK using the synthetic volume as the
-fixed image. It needs a starting transform in the session (a landmark fit, even a single-plane one,
-or `locate`). On the example FIB-SEM / Airyscan pair it reproduced the manual single-slice overlay
-and held across the whole confocal slab; the phantom test recovers a 540 nm perturbation to 40 nm.
-A B-spline stage (`register_bspline`) exists for local deformation but is not wired into the CLI yet.
+fixed image, and finally polishes the 12 affine parameters with a derivative-free (Powell) search
+on the synthetic NCC (`--no-polish` skips it, `--polish-maxfev` bounds it). Every NCC that compares
+transforms is summed over the union of the seed's coverage and the candidate's, so a candidate
+cannot score by shrinking the confocal slab out of its dim edge planes or by growing it into voxels
+it does not match; the polish is kept only if that NCC does not drop, and the gradient stage falls
+back to the z-scan seed when it lowers it. It needs a starting transform in the session (a landmark
+fit, even a single-plane one, or `locate`). On the example FIB-SEM / Airyscan pair it reproduced the
+manual single-slice overlay and held across the whole confocal slab (the polish raised the slice-646
+agreement with the manual overlay from 0.70 to 0.72 on MitoTracker and also improved the two unfitted
+channels); the phantom test recovers a 540 nm perturbation to 40 nm. Extra organelles can join the polish as cues, `--cue MASK CHANNEL SIGN
+[WEIGHT]` (sign -1 for an exclusion such as a nucleus in a cytoplasmic channel); on the example data
+the nucleus added nothing because it only touches a corner of the field, so the default is the
+segmented organelle alone. A B-spline stage (`register_bspline`) exists for local deformation but
+is not wired into the CLI yet.
 
 ## Conventions
 

@@ -596,7 +596,14 @@ def cmd_register_seg(args: argparse.Namespace) -> int:
     """Segmentation-to-image registration: mask -> synthetic fluorescence -> z scan -> affine."""
     from .register.fit import fit_landmarks
     from .register.transforms import AffineTransform
-    from .seg.intensity import ncc_on_synthetic, register_affine, z_scan
+    from .seg.intensity import (
+        Cue,
+        coverage_on_synthetic,
+        ncc_on_synthetic,
+        refine_affine_multicue,
+        register_affine,
+        z_scan,
+    )
     from .seg.mitonet import open_mask
     from .seg.quantem import open_probability
     from .seg.synthetic import synthetic_fluorescence
@@ -669,9 +676,76 @@ def cmd_register_seg(args: argparse.Namespace) -> int:
         sampling=args.sampling,
     )
     print(res.summary())
-    ncc1 = ncc_on_synthetic(syn, lm, args.channel, res.lm_to_em)
+    # from here on every NCC always includes the voxels the seed transform covers, so a
+    # transform cannot look better merely by covering less of the synthetic volume
+    region = coverage_on_synthetic(syn, lm, args.channel, AffineTransform(Mb))
+    ncc1 = ncc_on_synthetic(syn, lm, args.channel, res.lm_to_em, region)
     print(f"NCC on synthetic: initial {ncc0:.4f} -> seed {best['ncc']:.4f} -> affine {ncc1:.4f}")
-    sess.transform = res.lm_to_em.to_dict()
+    final = res.lm_to_em
+    # the gradient stage can wander when it starts from an already good transform: keep the
+    # z-scan seed if it scores better on the fine synthetic volume
+    ncc_seed = ncc_on_synthetic(syn, lm, args.channel, AffineTransform(Mb), region)
+    if np.isfinite(ncc_seed) and ncc_seed > ncc1 + 1e-4:
+        print(f"affine stage lowered the NCC ({ncc1:.4f} < seed {ncc_seed:.4f}); keeping the seed")
+        final = AffineTransform(Mb, "affine")
+        ncc1 = ncc_seed
+    polish: dict[str, Any] | None = None
+    if not args.no_polish:
+        # final polish: derivative-free (Powell) refinement of the 12 affine parameters on the
+        # NCC of the coarse synthetic volume, plus any extra cues (--cue) the user adds
+        cues = [
+            Cue(
+                "mask",
+                coarse,
+                args.channel,
+                sign=1.0,
+                weight=1.0,
+                region=coverage_on_synthetic(coarse, lm, args.channel, AffineTransform(Mb)),
+            )
+        ]
+        for spec in args.cue or []:
+            if len(spec) < 3:
+                raise SystemExit("--cue needs MASK CHANNEL SIGN [WEIGHT]")
+            c_mask, c_attrs = open_mask(spec[0])
+            c_soft = None if args.hard else open_probability(spec[0])
+            c_syn = synthetic_fluorescence(
+                c_soft if c_soft is not None else c_mask,
+                em,
+                target_voxel_nm=2 * args.voxel,
+                psf_fwhm_nm=psf,
+                z_range=zr,
+                name=c_attrs.get("model", "cue"),
+            )  # type: ignore[arg-type]
+            cues.append(
+                Cue(
+                    Path(spec[0]).stem,
+                    c_syn,
+                    int(spec[1]),
+                    sign=float(spec[2]),
+                    weight=float(spec[3]) if len(spec) > 3 else 1.0,
+                )
+            )
+        t_pol, info = refine_affine_multicue(cues, lm, final, maxfev=args.polish_maxfev)
+        ncc2 = ncc_on_synthetic(syn, lm, args.channel, t_pol, region)
+        cue_txt = " ".join(f"{k}:{v:.4f}" for k, v in info["after"].items())
+        print(
+            f"polish ({len(cues)} cue{'s' if len(cues) > 1 else ''}, {info['n_eval']} evaluations):"
+            f" NCC {ncc1:.4f} -> {ncc2:.4f}  [{cue_txt}]"
+        )
+        polish = {
+            "cues": [c.name for c in cues],
+            "n_eval": info["n_eval"],
+            "before": info["before"],
+            "after": info["after"],
+            "ncc": ncc2,
+        }
+        if np.isfinite(ncc2) and ncc2 >= ncc1 - 1e-4:
+            final = t_pol
+            polish["accepted"] = True
+        else:
+            polish["accepted"] = False
+            print("polish did not improve the NCC on the fine synthetic volume; keeping the affine")
+    sess.transform = final.to_dict()
     sess.kind = "affine"
     sess.fit = None
     sess.displacement = None
@@ -682,6 +756,7 @@ def cmd_register_seg(args: argparse.Namespace) -> int:
         "ncc": {"initial": ncc0, "seed": best["ncc"], "affine": ncc1},
         "z_scan": scan,
         "metric": [res.metric_before, res.metric_after],
+        "polish": polish,
     }
     sess.save()
     print(f"session updated: {sess.path}")
@@ -932,6 +1007,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--hard",
         action="store_true",
         help="use the binary mask even if a probability map is stored",
+    )
+    rs.add_argument(
+        "--no-polish",
+        action="store_true",
+        help="skip the final Powell polish of the affine on the synthetic NCC",
+    )
+    rs.add_argument(
+        "--polish-maxfev",
+        type=int,
+        default=400,
+        help="function evaluations allowed for the polish (default 400)",
+    )
+    rs.add_argument(
+        "--cue",
+        nargs="+",
+        action="append",
+        metavar="ARG",
+        help="extra polish cue: MASK CHANNEL SIGN [WEIGHT] (SIGN +1 bright, -1 exclusion); repeatable",
     )
     rs.add_argument("--cache-dir")
     rs.set_defaults(func=cmd_register_seg)
