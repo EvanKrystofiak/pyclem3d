@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="src/pyclem3d/assets/logo/pyclem3d_logo_on_dark.svg">
+  <img src="src/pyclem3d/assets/logo/pyclem3d_logo_on_light.svg" alt="pyCLEM3D" height="96">
+</picture>
+
 # pyclem3d
 
 Volumetric confocal ↔ volume-EM correlation (successor to pyCLEM 0.6): take a confocal

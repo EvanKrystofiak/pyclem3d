@@ -1,5 +1,6 @@
 name: pyclem3d
 display_name: pyCLEM-3D
+icon: pyclem3d.assets.logo:pyclem3d_mark_256.png
 schema_version: 0.2.0
 contributions:
   commands:
