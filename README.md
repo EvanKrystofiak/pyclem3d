@@ -13,6 +13,13 @@ the two volumes with endogenous landmarks, verify the registration honestly, and
 The design is in [`pyclem3d_plan_v2.md`](pyclem3d_plan_v2.md); this README documents what the
 code does today. Python ≥ 3.11.
 
+## How it works
+
+<img src="docs/pyclem3d_how_it_works.png" width="100%" alt="How pyCLEM3D works, in five steps. 1, two volumes: a FIB-SEM or SBF-SEM stack and a confocal z-stack of the same cells. 2, segment the EM: a model finds one organelle in every EM slice, usually mitochondria. 3, blur it like the confocal: the mask is blurred with the confocal's PSF into synthetic fluorescence. 4, match real to synthetic: scan depth and z scale, then fit a 3D affine that moves the real channel onto it. 5, fused volume: the fluorescence sits on the EM, exported as OME-Zarr with the transform files. Step 4 starts from a rough alignment, such as a few landmarks picked in napari. The EM is never resampled.">
+
+This is the segmentation-driven path (`register-seg`, [below](#mitochondria-segmentation-empanada-in-the-same-napari)).
+Landmark-only registration skips steps 2 and 3.
+
 ## Install
 
 ```bash

@@ -16,9 +16,11 @@ def test_manifest_icon_is_a_shipped_png():
     assert icon.read_bytes().startswith(PNG_MAGIC)
 
 
-def test_readme_logo_files_exist():
+def test_readme_images_exist():
     readme = Path(__file__).resolve().parents[1] / "README.md"
-    refs = re.findall(r'(?:src|srcset)="([^"]+pyclem3d_logo[^"]+)"', readme.read_text("utf-8"))
-    assert refs, "README.md no longer shows the logo"
-    for ref in refs:
+    refs = re.findall(r'(?:src|srcset)="([^"]+)"', readme.read_text("utf-8"))
+    local = [r for r in refs if not r.startswith(("http://", "https://"))]
+    assert any("pyclem3d_logo" in r for r in local), "README.md no longer shows the logo"
+    assert any("how_it_works" in r for r in local), "README.md no longer shows the infographic"
+    for ref in local:
         assert (readme.parent / ref).is_file(), ref

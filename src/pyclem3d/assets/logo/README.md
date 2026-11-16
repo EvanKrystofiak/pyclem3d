@@ -69,6 +69,7 @@ It needs fontTools and resvg-py (`pip install fonttools resvg-py`). resvg stands
 supplies the "py") are in the family logo kit. `marks.py` holds all four directions; to
 switch, change `mark_body()` in `make_logo.py` and redraw the two pixel-fitted icons in
 `fitted.py`. `explore.py` redraws the options sheet and `preview.py` the family preview.
+`make_infographic.py` builds the "How it works" picture in `docs/` from the same parts.
 
 Keep clear space around the logo of at least the bracket arm's length. Don't recolour
 the mark's parts separately, stretch it, or put the lockup on a busy image.
